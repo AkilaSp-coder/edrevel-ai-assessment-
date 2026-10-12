@@ -31,3 +31,22 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# React / Node
+**/node_modules/
+**/dist/
+
+# Secrets and environment files
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+
+# Compiled Java files
+*.class
+
+# Crash and log files
+*.log
+hs_err_pid*.log
+replay_pid*.log

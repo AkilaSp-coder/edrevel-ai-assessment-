@@ -1,3 +1,4 @@
+
 package com.edrevel.learningpath.controller;
 
 import com.edrevel.learningpath.dto.LearningPathRequest;
@@ -11,6 +12,13 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.util.NoSuchElementException;
 
+import com.edrevel.learningpath.dto.EvaluationRequest;
+import com.edrevel.learningpath.dto.EvaluationResponse;
+
+@CrossOrigin(origins = {
+    "http://localhost:5173",
+    "http://localhost:5174"
+})
 @RestController
 @RequestMapping("/api/learning-paths")
 public class LearningPathController {
@@ -37,26 +45,24 @@ public class LearningPathController {
         return ResponseEntity.ok(service.getAll());
     }
 
-    
-@GetMapping("/{id}")
-public ResponseEntity<LearningPath> getById(
-        @PathVariable Long id
-) {
-    return ResponseEntity.ok(service.getById(id));
-}
-
+    @GetMapping("/{id}")
+    public ResponseEntity<LearningPath> getById(
+            @PathVariable Long id
+    ) {
+        return ResponseEntity.ok(service.getById(id));
+    }
 
     @PutMapping("/{id}")
-public ResponseEntity<LearningPath> update(
-        @PathVariable Long id,
-        @RequestBody LearningPathRequest request
-) {
-    try {
-        return ResponseEntity.ok(service.update(id, request));
-    } catch (NoSuchElementException e) {
-        return ResponseEntity.notFound().build();
+    public ResponseEntity<LearningPath> update(
+            @PathVariable Long id,
+            @RequestBody LearningPathRequest request
+    ) {
+        try {
+            return ResponseEntity.ok(service.update(id, request));
+        } catch (NoSuchElementException e) {
+            return ResponseEntity.notFound().build();
+        }
     }
-}
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(
@@ -65,12 +71,21 @@ public ResponseEntity<LearningPath> update(
         service.delete(id);
         return ResponseEntity.noContent().build();
     }
-    
-@ExceptionHandler(NoSuchElementException.class)
-public ResponseEntity<String> handleNotFound(NoSuchElementException ex) {
-    return ResponseEntity
-            .status(HttpStatus.NOT_FOUND)
-            .body(ex.getMessage());
-}
 
+    @ExceptionHandler(NoSuchElementException.class)
+    public ResponseEntity<String> handleNotFound(
+            NoSuchElementException ex
+    ) {
+        return ResponseEntity
+                .status(HttpStatus.NOT_FOUND)
+                .body(ex.getMessage());
+    }
+    @PostMapping("/{id}/evaluate")
+public ResponseEntity<EvaluationResponse> evaluate(
+        @PathVariable Long id,
+        @RequestBody EvaluationRequest request) {
+
+    return ResponseEntity.ok(service.evaluate(id, request));
+}
+    
 }
