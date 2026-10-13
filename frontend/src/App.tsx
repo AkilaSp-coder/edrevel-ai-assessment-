@@ -1,1059 +1,157 @@
 import { useState } from 'react'
-import { getAIRecommendation } from './aiApi'
-import './App.css'
-type AssessmentQuestion = {
-  id: number
-  question: string
-  options: string[]
-  correctAnswer: number
-}
-type LearningNode = {
-  id: number
-  type: 'unit' | 'assessment'
-  title: string
-  description: string
-  questions?: AssessmentQuestion[]
-}
-type SavedLearningPath = {
-  databaseId?: number
-  id?: number
-  name: string
-  description?: string
-  status?: string
-  payload?: string | { nodes?: unknown; content?: unknown }
-  content?: string | LearningNode[]
-}
-const API_URL = 'http://localhost:8080/api/learning-paths'
-const initialNodes: LearningNode[] = [
-  {
-    id: 1,
-    type: 'unit',
-    title: 'Introduction',
-    description: 'Introduce the learning objectives.',
-  },
-  {
-    id: 2,
-    type: 'unit',
-    title: 'Core Concepts',
-    description: 'Learn the essential concepts and fundamentals.',
-  },
-  {
-    id: 3,
-    type: 'assessment',
-    title: 'Knowledge Check',
-    description: 'Test your understanding of the material.',
-    questions: [{ id: 1, question: 'Which keyword is used to inherit a class in Java?', options: ['implements', 'extends', 'imports', 'package'], correctAnswer: 1 }],
-  },
+import './App.css';
+
+type BlockType = 'start' | 'section' | 'group' | 'complete'
+type Block = { id: number; type: BlockType; title: string; description: string; questions: number; duration: number; difficulty: string; condition?: string }
+type SavedPath = { id?: number; databaseId?: number; name?: string; description?: string; payload?: string | { nodes?: unknown[] }; content?: string | unknown[] }
+const API = 'http://localhost:8080/api/learning-paths'
+const initial: Block[] = [
+ {id:1,type:'start',title:'Start Assessment',description:'Begin the adaptive assessment.',questions:0,duration:0,difficulty:'—'},
+ {id:2,type:'section',title:'Math Module 1',description:'Regular section',questions:22,duration:35,difficulty:'Medium'},
+ {id:3,type:'group',title:'Math Module 2',description:'Adaptive based on Module 1 performance.',questions:0,duration:0,difficulty:'Adaptive',condition:'Routes learners based on Module 1 score.'},
+ {id:4,type:'section',title:'Math Module 2 - Easy',description:'Foundational practice for learners who need support.',questions:22,duration:35,difficulty:'Easy',condition:'If score < 50%'},
+ {id:5,type:'section',title:'Math Module 2 - Advanced',description:'Advanced practice for learners who meet the threshold.',questions:22,duration:35,difficulty:'Advanced',condition:'If score ≥ 50%'},
+ {id:6,type:'section',title:'Reading & Comp Module 1',description:'Reading comprehension assessment.',questions:27,duration:32,difficulty:'Medium'},
+ {id:7,type:'group',title:'Reading & Comp Module 2',description:'Adaptive reading comprehension module.',questions:0,duration:0,difficulty:'Adaptive',condition:'Adaptive based on Module 1 performance.'},
+ {id:8,type:'section',title:'R&C Module 2 - Easy',description:'Foundational reading practice.',questions:27,duration:32,difficulty:'Easy',condition:'If score < 50%'},
+ {id:9,type:'section',title:'R&C Module 2 - Advanced',description:'Advanced reading practice.',questions:27,duration:32,difficulty:'Advanced',condition:'If score ≥ 50%'},
+ {id:10,type:'complete',title:'Complete Assessment',description:'Finish the learning path.',questions:0,duration:0,difficulty:'—'}
 ]
-function getPathId(path: SavedLearningPath): number | undefined {
-  return path.databaseId ?? path.id
-}
-function parsePathContent(path: SavedLearningPath): LearningNode[] {
-  // The Spring Boot API stores the complete LearningPathRequest in `payload`.
-  // Older frontend records may use `content`, so support both formats.
-  let parsed: unknown = path.payload ?? path.content
-  if (parsed == null) {
-    throw new Error('This saved path has no payload or content.')
-  }
+const pos: Record<number,{x:number;y:number}> = {1:{x:355,y:22},2:{x:355,y:112},3:{x:345,y:204},4:{x:175,y:305},5:{x:520,y:305},6:{x:355,y:412},7:{x:345,y:505},8:{x:175,y:606},9:{x:520,y:606},10:{x:355,y:710}}
+const edges = [[1,2],[2,3],[3,4],[3,5],[4,6],[5,6],[6,7],[7,8],[7,9],[8,10],[9,10]]
+const idOf = (p: SavedPath) => p.databaseId ?? p.id
 
-  for (let i = 0; i < 3 && typeof parsed === 'string'; i++) {
-    try {
-      parsed = JSON.parse(parsed)
-    } catch {
-      throw new Error('Saved learning path payload is not valid JSON.')
-    }
-  }
+export default function App() {
+ const [blocks,setBlocks] = useState<Block[]>(initial)
+ const [selectedId,setSelectedId] = useState(4)
+ const [prompt,setPrompt] = useState('Create conditional quiz flows with adaptive sections.')
+ const [status,setStatus] = useState('Builder ready')
+ const [paths,setPaths] = useState<SavedPath[]>([])
+ const [pathId,setPathId] = useState('')
+ const [loading,setLoading] = useState(false)
+ const [preview,setPreview] = useState(false)
+ const [zoom,setZoom] = useState(70)
+ const [showConditions,setShowConditions] = useState(true)
+ const [error,setError] = useState('')
+ const selected = blocks.find(b=>b.id===selectedId) ?? blocks[0]
 
-  if (Array.isArray(parsed)) {
-    return normalizeFrontendNodes(parsed)
-  }
+ function update<K extends keyof Block>(key:K,value:Block[K]) {
+  setBlocks(curr=>curr.map(b=>b.id===selectedId?{...b,[key]:value}:b)); setStatus('Unsaved changes')
+ }
+ function add(type:'section'|'group') {
+  const id=Math.max(0,...blocks.map(b=>b.id))+1
+  setBlocks(curr=>[...curr,{id,type,title:type==='section'?'New Section':'New Group',description:'',questions:0,duration:0,difficulty:'Select difficulty',condition:type==='group'?'Add routing conditions.':''}])
+  setSelectedId(id);setStatus('Unsaved changes')
+ }
+ function saveLocal() {
+  try {
+    const draft = {
+      blocks,
+      prompt,
+      savedAt: new Date().toISOString(),
+    };
 
-  if (!parsed || typeof parsed !== 'object') {
-    throw new Error('Saved path payload is not an object or node list.')
-  }
-
-  const wrapper = parsed as { nodes?: unknown; content?: unknown }
-  let rawNodes: unknown = wrapper.nodes ?? wrapper.content
-  if (typeof rawNodes === 'string') {
-    try {
-      rawNodes = JSON.parse(rawNodes)
-    } catch {
-      throw new Error('Could not parse the saved nodes.')
-    }
-  }
-  if (!Array.isArray(rawNodes)) {
-    throw new Error('Saved content is not a list of learning blocks. Check the backend response.')
-  }
-
-  // Backend NodeDto uses label/type/config; the editor uses title/questions.
-  return rawNodes.map((item, index) => {
-    if (!item || typeof item !== 'object') {
-      throw new Error(`Learning block ${index + 1} has invalid data.`)
-    }
-    const node = item as {
-      id?: string | number
-      type?: string
-      label?: string
-      title?: string
-      description?: string
-      config?: Record<string, unknown>
-      questions?: unknown
-    }
-    const rawType = (node.type ?? '').toLowerCase()
-    const type: LearningNode['type'] = rawType.includes('assessment') || rawType.includes('quiz') ? 'assessment' : 'unit'
-    const configQuestions = node.config?.questions
-    const questionsSource = Array.isArray(node.questions) ? node.questions : configQuestions
-    const questions: AssessmentQuestion[] = Array.isArray(questionsSource)
-      ? questionsSource.map((q, qIndex) => {
-          const question = (q && typeof q === 'object' ? q : {}) as Record<string, unknown>
-          const options = Array.isArray(question.options) ? question.options.map(String) : ['', '', '', '']
-          const answer = Number(question.correctAnswer)
-          return {
-            id: Number(question.id) || qIndex + 1,
-            question: typeof question.question === 'string' ? question.question : '',
-            options,
-            correctAnswer: Number.isInteger(answer) && answer >= 0 && answer < options.length ? answer : 0,
-          }
-        })
-      : []
-    const numericId = Number(node.id)
-    return {
-      id: Number.isFinite(numericId) && numericId > 0 ? numericId : index + 1,
-      type,
-      title: typeof node.title === 'string' ? node.title : typeof node.label === 'string' ? node.label : `Block ${index + 1}`,
-      description: typeof node.description === 'string' ? node.description : '',
-      ...(type === 'assessment' ? { questions } : {}),
-    }
-  })
-}
-
-function normalizeFrontendNodes(rawNodes: unknown[]): LearningNode[] {
-  return rawNodes.map((item, index) => {
-    if (!item || typeof item !== 'object') throw new Error(`Learning block ${index + 1} has invalid data.`)
-    const node = item as Partial<LearningNode>
-    if (node.type !== 'unit' && node.type !== 'assessment') throw new Error(`Learning block ${index + 1} has invalid type.`)
-    const questions = Array.isArray(node.questions) ? node.questions.map((q, qIndex) => ({
-      id: Number(q.id) || qIndex + 1,
-      question: typeof q.question === 'string' ? q.question : '',
-      options: Array.isArray(q.options) ? q.options.map(String) : ['', '', '', ''],
-      correctAnswer: Number.isInteger(q.correctAnswer) && q.correctAnswer >= 0 && q.correctAnswer < 4 ? q.correctAnswer : 0,
-    })) : []
-    return {
-      id: Number(node.id) || index + 1,
-      type: node.type,
-      title: typeof node.title === 'string' ? node.title : '',
-      description: typeof node.description === 'string' ? node.description : '',
-      ...(node.type === 'assessment' ? { questions } : {}),
-    }
-  })
-}
-
-function App() {
-  const [prompt, setPrompt] = useState(
-    'Create a beginner learning path with a knowledge assessment.',
-  )
-  const [nodes, setNodes] = useState<LearningNode[]>(initialNodes)
-  const [selectedId, setSelectedId] = useState<number | null>(1)
-  const [status, setStatus] = useState('Draft')
-  const [nextId, setNextId] = useState(4)
-  const [saving, setSaving] = useState(false)
-  const [loadingPaths, setLoadingPaths] = useState(false)
-  const [savedPaths, setSavedPaths] = useState<SavedLearningPath[]>([])
-  const [backendPathId, setBackendPathId] = useState<number | null>(null)
-  const [selectedBackendPathId, setSelectedBackendPathId] = useState('')
-  const [validationErrors, setValidationErrors] = useState<string[]>([])
-  const [validationPassed, setValidationPassed] = useState(false)
-  const [previewMode, setPreviewMode] = useState(false)
-  const [quizAnswers, setQuizAnswers] = useState<Record<string, number>>({})
-  const [quizSubmitted, setQuizSubmitted] = useState(false)
-  const [aiRecommendation, setAiRecommendation] = useState('')
-  const [aiLoading, setAiLoading] = useState(false)
-  const [aiError, setAiError] = useState('')
-  const selectedNode = nodes.find((node) => node.id === selectedId)
-  function openLearnerPreview() {
-    setQuizAnswers({})
-    setQuizSubmitted(false)
-    setAiRecommendation('')
-    setAiError('')
-    setAiLoading(false)
-    setPreviewMode(true)
-  }
-  function setQuizAnswer(nodeId: number, questionId: number, optionIndex: number) {
-    setQuizAnswers((current) => ({ ...current, [`${nodeId}-${questionId}`]: optionIndex }))
-  }
-  const quizQuestions = nodes.flatMap((node) =>
-    node.type === 'assessment'
-      ? (node.questions ?? []).map((question) => ({ nodeId: node.id, question }))
-      : [],
-  )
-  const quizScore = quizQuestions.reduce((score, item) =>
-    score + (quizAnswers[`${item.nodeId}-${item.question.id}`] === item.question.correctAnswer ? 1 : 0), 0,
-  )
-  async function submitQuiz() {
-    const unanswered = quizQuestions.filter(
-      (item) => quizAnswers[`${item.nodeId}-${item.question.id}`] === undefined,
-    )
-    if (unanswered.length > 0) {
-      alert(`Please answer all questions. ${unanswered.length} question(s) remain unanswered.`)
-      return
-    }
-
-    // Show quiz results immediately; AI recommendations load independently.
-    setQuizSubmitted(true)
-    setAiRecommendation('')
-    setAiError('')
-    setAiLoading(true)
-
-    const percentage = quizQuestions.length > 0
-      ? Math.round((quizScore / quizQuestions.length) * 100)
-      : 0
-    const learningContext = nodes
-      .filter((node) => node.type === 'assessment')
-      .map((node) => node.title)
-      .filter(Boolean)
-      .join(', ') || prompt.trim() || 'Learning path quiz'
-
-    try {
-      const recommendation = await getAIRecommendation(percentage, learningContext)
-      setAiRecommendation(recommendation)
-    } catch (error) {
-      console.error('AI recommendation failed:', error)
-      setAiError(
-        error instanceof Error
-          ? error.message
-          : 'Unable to generate an AI recommendation. You can still review your quiz results.',
-      )
-    } finally {
-      setAiLoading(false)
-    }
-  }
-  function addNode(type: LearningNode['type']) {
-    const node: LearningNode = {
-      id: nextId,
-      type,
-      title: type === 'unit' ? 'New Learning Unit' : 'New Assessment',
-      description:
-        type === 'unit'
-          ? 'Add learning content here.'
-          : 'Add assessment questions here.',
-      ...(type === 'assessment'
-        ? { questions: [{ id: 1, question: '', options: ['', '', '', ''], correctAnswer: 0 }] }
-        : {}),
-    }
-    setNodes((current) => [...current, node])
-    setSelectedId(nextId)
-    setNextId((current) => current + 1)
-    setStatus('Draft')
-  }
-  function updateSelected(field: 'title' | 'description', value: string) {
-    setNodes((current) =>
-      current.map((node) =>
-        node.id === selectedId ? { ...node, [field]: value } : node,
-      ),
-    )
-    setStatus('Draft')
-  }
-  function updateQuestion(questionId: number, changes: Partial<AssessmentQuestion>) {
-    setNodes((current) => current.map((node) => node.id !== selectedId ? node : {
-      ...node,
-      questions: (node.questions ?? []).map((question) => question.id === questionId ? { ...question, ...changes } : question),
-    }))
-    setStatus('Draft')
-  }
-  function addQuestion() {
-    if (!selectedNode || selectedNode.type !== 'assessment') return
-    const questions = selectedNode.questions ?? []
-    const newId = Math.max(0, ...questions.map((question) => question.id)) + 1
-    setNodes((current) => current.map((node) => node.id === selectedId ? {
-      ...node,
-      questions: [...(node.questions ?? []), { id: newId, question: '', options: ['', '', '', ''], correctAnswer: 0 }],
-    } : node))
-    setStatus('Draft')
-  }
-  function deleteQuestion(questionId: number) {
-    setNodes((current) => current.map((node) => node.id !== selectedId ? node : {
-      ...node,
-      questions: (node.questions ?? []).filter((question) => question.id !== questionId),
-    }))
-    setStatus('Draft')
-  }
-  function updateQuestionOption(questionId: number, optionIndex: number, value: string) {
-    const question = selectedNode?.questions?.find((item) => item.id === questionId)
-    if (!question) return
-    const options = [...question.options]
-    options[optionIndex] = value
-    updateQuestion(questionId, { options })
-  }
-  function deleteSelected() {
-    if (selectedId === null) return
-    const remaining = nodes.filter((node) => node.id !== selectedId)
-    setNodes(remaining)
-    setSelectedId(remaining[0]?.id ?? null)
-    setStatus('Draft')
-  }
-  function saveLocally() {
     localStorage.setItem(
-      'edrevel-learning-path',
-      JSON.stringify({ prompt, nodes }),
-    )
-    setStatus('Saved locally')
-    alert('Learning path saved in this browser.')
+      'edrevel-adaptive-path',
+      JSON.stringify(draft)
+    );
+
+    setStatus('Draft saved successfully');
+    setError('');
+    alert('Draft saved successfully!');
+  } catch (error) {
+    console.error('Save draft failed:', error);
+    setError('Unable to save draft. Please try again.');
+    setStatus('Save failed');
   }
-  function loadLocally() {
-    const saved = localStorage.getItem('edrevel-learning-path')
-    if (!saved) {
-      alert('No locally saved learning path was found.')
-      return
-    }
-    try {
-      const parsed = JSON.parse(saved)
-      const restoredNodes: unknown = Array.isArray(parsed)
-        ? parsed
-        : parsed.nodes
-      if (!Array.isArray(restoredNodes)) {
-        throw new Error('Invalid saved learning path')
-      }
-      const restored = restoredNodes as LearningNode[]
-      setNodes(restored)
-      setSelectedId(restored[0]?.id ?? null)
-      setNextId(Math.max(0, ...restored.map((node) => node.id)) + 1)
-      if (typeof parsed.prompt === 'string') {
-        setPrompt(parsed.prompt)
-      }
-      setBackendPathId(null)
-      setSelectedBackendPathId('')
-      setStatus('Loaded locally — unsaved to backend')
-    } catch (error) {
-      console.error('Load locally failed:', error)
-      alert('The saved learning path could not be read.')
-    }
-  }
-  
-const [generating] = useState(false)
-
-
-function generateSample() {
-  if (!prompt.trim()) {
-    alert('Please describe the learning path first.')
-    return
-  }
-
-  const topic = prompt.trim()
-  const firstId = nextId
-
-  const newNodes: LearningNode[] = [
-    {
-      id: firstId,
-      type: 'unit',
-      title: 'Introduction',
-      description: `Introduction and learning objectives for: ${topic}`,
-    },
-    {
-      id: firstId + 1,
-      type: 'unit',
-      title: 'Variables and Data Types',
-      description:
-        'Learn variables, primitive data types, declarations, and examples.',
-    },
-    {
-      id: firstId + 2,
-      type: 'unit',
-      title: 'Object-Oriented Programming',
-      description:
-        'Learn classes, objects, inheritance, encapsulation, and polymorphism.',
-    },
-    {
-      id: firstId + 3,
-      type: 'assessment',
-      title: 'Knowledge Check',
-      description: 'Test your understanding with multiple-choice questions.',
-      questions: [
-        {
-          id: 1,
-          question: 'Which keyword is used to inherit a class in Java?',
-          options: ['implements', 'extends', 'imports', 'package'],
-          correctAnswer: 1,
-        },
-        {
-          id: 2,
-          question: 'Which of these is a primitive data type in Java?',
-          options: ['String', 'Integer', 'int', 'Scanner'],
-          correctAnswer: 2,
-        },
-        {
-          id: 3,
-          question: 'Which keyword is used to create an object in Java?',
-          options: ['class', 'new', 'void', 'static'],
-          correctAnswer: 1,
-        },
-      ],
-    },
-  ]
-
-  setNodes(newNodes)
-  setSelectedId(firstId)
-  setNextId(firstId + newNodes.length)
-  setBackendPathId(null)
-  setSelectedBackendPathId('')
-  setStatus('Demo learning path generated')
 }
-
-  async function loadBackendPaths() {
-    setLoadingPaths(true)
-    try {
-      const response = await fetch(API_URL)
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
-      }
-      const data: unknown = await response.json()
-      if (!Array.isArray(data)) {
-        throw new Error('Expected an array of saved learning paths.')
-      }
-      const paths = data as SavedLearningPath[]
-      setSavedPaths(paths)
-      if (paths.length === 0) {
-        setSelectedBackendPathId('')
-        alert('No saved learning paths found in the backend.')
-      } else {
-        setStatus(`Backend connected — ${paths.length} path(s) found`)
-      }
-    } catch (error) {
-      console.error('Load paths failed:', error)
-      alert(
-        `Could not load learning paths: ${
-          error instanceof Error ? error.message : 'Unknown error'
-        }. Check that Spring Boot is running on port 8080 and CORS is allowed.`,
-      )
-    } finally {
-      setLoadingPaths(false)
-    }
-  }
-  function loadSelectedBackendPath() {
-    const pathId = Number(selectedBackendPathId)
-    const path = savedPaths.find((item) => getPathId(item) === pathId)
-    if (!path || !pathId) {
-      alert('Please choose a saved learning path first.')
-      return
-    }
-    try {
-      const restoredNodes = parsePathContent(path)
-      setNodes(restoredNodes)
-      setSelectedId(restoredNodes[0]?.id ?? null)
-      setNextId(Math.max(0, ...restoredNodes.map((node) => node.id)) + 1)
-      setPrompt(path.description ?? '')
-      setBackendPathId(pathId)
-      setStatus(`Editing backend path #${pathId}`)
-    } catch (error) {
-      console.error('Could not restore saved path:', error)
-      alert(
-        error instanceof Error
-          ? error.message
-          : 'The saved path content could not be loaded.',
-      )
-    }
-  }
-  function validatePath(): boolean {
-    const errors: string[] = []
-    if (nodes.length === 0) {
-      errors.push('Add at least one learning unit or assessment.')
-    }
-    nodes.forEach((node, index) => {
-      const blockName = node.title.trim() || `Block ${index + 1}`
-      if (!node.title.trim()) {
-        errors.push(`${blockName}: title is required.`)
-      }
-      if (!node.description.trim()) {
-        errors.push(`${blockName}: description is required.`)
-      }
-    })
-    setValidationErrors(errors)
-    setValidationPassed(errors.length === 0)
-    if (errors.length === 0) {
-      setStatus('Validation passed')
-    } else {
-      setStatus(`Validation failed — ${errors.length} issue(s)`)
-    }
-    return errors.length === 0
-  }
-  async function saveToBackend() {
-    if (!validatePath()) {
-      alert('Please fix the validation errors before saving.')
-      return
-    }
-    setSaving(true)
-    try {
-      const isEditing = backendPathId !== null
-      const url = isEditing ? `${API_URL}/${backendPathId}` : API_URL
-      const response = await fetch(url, {
-        method: isEditing ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: 'Edrevel Learning Path',
-          description: prompt,
-          status: 'DRAFT',
-          version: 1,
-          canvas: null,
-          nodes: nodes.map((node, index) => ({
-            id: String(node.id),
-            componentId: String(node.id),
-            type: node.type,
-            label: node.title,
-            description: node.description,
-            position: { x: 100, y: index * 150 },
-            config: {
-              questions: node.type === 'assessment' ? (node.questions ?? []) : [],
-            },
-          })),
-          edges: [],
-        }),
-      })
-      if (!response.ok) {
-        const message = await response.text()
-        throw new Error(`HTTP ${response.status}${message ? `: ${message}` : ''}`)
-      }
-      const saved = (await response.json().catch(() => null)) as
-        | SavedLearningPath
-        | null
-      const returnedId = saved ? getPathId(saved) : undefined
-      if (returnedId !== undefined) {
-        setBackendPathId(returnedId)
-        setSelectedBackendPathId(String(returnedId))
-      }
-      setStatus(isEditing ? 'Updated in backend' : 'Saved to backend')
-      alert(
-        isEditing
-          ? 'Learning path updated successfully.'
-          : 'Learning path saved successfully.',
-      )
-      await loadBackendPaths()
-    } catch (error) {
-      console.error('Save failed:', error)
-      alert(
-        `Could not save: ${
-          error instanceof Error ? error.message : 'Unknown error'
-        }`,
-      )
-    } finally {
-      setSaving(false)
-    }
-  }
-  async function loadApiComponents() {
-    await loadBackendPaths()
-  }
-  return (
-    <main className="app-shell">
-      <header className="topbar">
-        <div className="brand">
-          <div className="brand-mark">E</div>
-          <div>
-            <strong>Edrevel AI</strong>
-            <span>Learning Path Builder</span>
-          </div>
-        </div>
-        <div className="header-actions">
-          <span className="status-pill">● {status}</span>
-          <button onClick={loadLocally}>Load locally</button>
-          <button onClick={saveLocally}>Save locally</button>
-          <button onClick={loadBackendPaths} disabled={loadingPaths}>
-            {loadingPaths ? 'Loading paths...' : 'Load backend paths'}
-          </button>
-          <button
-            className="primary"
-            onClick={saveToBackend}
-            disabled={saving}
-          >
-            {saving
-              ? 'Saving...'
-              : backendPathId === null
-                ? 'Save to backend'
-                : 'Update backend path'}
-          </button>
-        </div>
-      </header>
-      <div className="workspace">
-        <aside className="sidebar">
-          <section className="panel-section">
-            <h3>CONTENT LIBRARY</h3>
-            <p className="muted">Your learning resources</p>
-            <button className="wide-button" onClick={() => addNode('unit')}>
-              + Add learning unit
-            </button>
-            <button
-              className="wide-button"
-              onClick={() => addNode('assessment')}
-            >
-              + Add assessment
-            </button>
-          </section>
-          <section className="panel-section">
-            <h3>BUILDING BLOCKS</h3>
-            <button className="block-button" onClick={() => addNode('unit')}>
-              <span className="block-icon blue">▤</span>
-              <span>
-                <strong>Learning Unit</strong>
-                <small>Content, lesson or topic</small>
-              </span>
-              <b>+</b>
-            </button>
-            <button
-              className="block-button"
-              onClick={() => addNode('assessment')}
-            >
-              <span className="block-icon green">✓</span>
-              <span>
-                <strong>Assessment</strong>
-                <small>Quiz or knowledge check</small>
-              </span>
-              <b>+</b>
-            </button>
-          </section>
-          <section className="panel-section">
-            <h3>BACKEND LEARNING PATHS</h3>
-            <p className="muted">
-              Load a saved path to edit it and save changes to the backend.
-            </p>
-            <button
-              className="wide-button"
-              onClick={loadBackendPaths}
-              disabled={loadingPaths}
-            >
-              {loadingPaths ? 'Loading...' : '↻ Refresh saved paths'}
-            </button>
-            <label htmlFor="saved-path-select">Saved path</label>
-            <select
-              id="saved-path-select"
-              value={selectedBackendPathId}
-              onChange={(event) => setSelectedBackendPathId(event.target.value)}
-            >
-              <option value="">Choose a learning path...</option>
-              {savedPaths.map((path, index) => {
-                const id = getPathId(path)
-                if (id === undefined) return null
-                return (
-                  <option key={id} value={String(id)}>
-                    {path.name || `Learning path ${index + 1}`} (ID: {id})
-                  </option>
-                )
-              })}
-            </select>
-            <button
-              className="wide-button"
-              onClick={loadSelectedBackendPath}
-              disabled={!selectedBackendPathId}
-            >
-              Load selected path to edit
-            </button>
-            <button className="wide-button" onClick={loadApiComponents}>
-              Check backend connection
-            </button>
-          </section>
-        </aside>
-        <section className="main-content">
-          <section className="ai-card">
-            <div className="ai-title">✦ AI Path Assistant</div>
-            <h2>Describe the learning path you want to create.</h2>
-            <div className="ai-controls">
-              <textarea
-                value={prompt}
-                onChange={(event) => {
-                  setPrompt(event.target.value)
-                  setStatus('Draft')
-                }}
-                aria-label="Learning path description"
-                placeholder="Describe your learning path..."
-              />
-              <button onClick={generateSample} disabled={generating}>
-  {generating ? 'Generating...' : '✦ Generate sample path'}
-</button>
-            </div>
-            <p className="muted">
-              Demo feature — sample generation does not use a live AI model.
-            </p>
-          </section>
-          <section className="canvas-section">
-            <div className="canvas-heading">
-              <div>
-                <h1>Learning Path</h1>
-                <p>Design and connect your learning journey.</p>
-              </div>
-              <div className="canvas-actions">
-                <button onClick={() => setStatus('Select nodes to connect')}>
-                  ↗ Connect nodes
-                </button>
-                <button onClick={validatePath}>✓ Validate path</button>
-                <button onClick={() => setPreviewMode(true)}>
-  Preview path
-</button>
-                <button onClick={deleteSelected}>Delete selected</button>
-              </div>
-            </div>
-            {validationErrors.length > 0 && (
-              <div role="alert" className="validation-errors" style={{ margin: "12px 0", padding: "12px 16px", border: "1px solid #ef4444", borderRadius: "8px", background: "#fef2f2", color: "#991b1b" }}>
-                <strong>Please fix these validation issues:</strong>
-                <ul>
-                  {validationErrors.map((error, index) => (
-                    <li key={`${index}-${error}`}>{error}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {validationPassed && (
-              <div role="status" className="validation-success" style={{ margin: "12px 0", padding: "12px 16px", border: "1px solid #16a34a", borderRadius: "8px", background: "#f0fdf4", color: "#166534" }}>
-                ✓ Learning path is valid. All blocks have a title and description.
-              </div>
-            )}
-            <div className="canvas">
-              <div className="node-list">
-                {nodes.length === 0 ? (
-                  <div className="empty-state">
-                    <div className="empty-icon">＋</div>
-                    <h2>Start building your learning path</h2>
-                    <p>Add a learning unit or assessment to get started.</p>
-                  </div>
-                ) : (
-                  nodes.map((node, index) => (
-                    <div className="node-wrapper" key={node.id}>
-                      {index > 0 && <div className="node-connector" />}
-                      <button
-                        className={`node-card ${node.type} ${
-                          selectedId === node.id ? 'selected' : ''
-                        }`}
-                        onClick={() => setSelectedId(node.id)}
-                      >
-                        <span className="node-type">
-                          {node.type === 'unit' ? 'LEARNING UNIT' : 'ASSESSMENT'}
-                        </span>
-                        <strong>{node.title}</strong>
-                        <span className="node-description">
-                          {node.description}
-                        </span>
-                        <span className="node-number">{index + 1}</span>
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          </section>
-        </section>
-        <aside className="properties-panel">
-          <h3>PROPERTIES</h3>
-          {selectedNode ? (
-            <>
-              <span className="selected-label">
-                {selectedNode.type === 'unit' ? 'LEARNING UNIT' : 'ASSESSMENT'}
-              </span>
-              <label htmlFor="node-title">Title</label>
-              <input
-                id="node-title"
-                value={selectedNode.title}
-                onChange={(event) => updateSelected('title', event.target.value)}
-              />
-              <label htmlFor="node-description">Description</label>
-              <textarea
-                id="node-description"
-                value={selectedNode.description}
-                onChange={(event) =>
-                  updateSelected('description', event.target.value)
-                }
-              />
-              {selectedNode.type === 'assessment' && (
-                <section style={{ marginTop: 20, borderTop: '1px solid #dbe7f3', paddingTop: 16 }}>
-                  <h4 style={{ margin: '0 0 12px' }}>Assessment questions</h4>
-                  {(selectedNode.questions ?? []).map((question, questionIndex) => (
-                    <div key={question.id} style={{ border: '1px solid #dbe7f3', borderRadius: 10, padding: 12, marginBottom: 14 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                        <strong>Question {questionIndex + 1}</strong>
-                        <button type="button" onClick={() => deleteQuestion(question.id)} disabled={(selectedNode.questions ?? []).length <= 1} style={{ color: '#b91c1c' }}>Remove</button>
-                      </div>
-                      <label htmlFor={`question-${question.id}`}>Question text</label>
-                      <textarea
-                        id={`question-${question.id}`}
-                        value={question.question}
-                        placeholder="Enter your question"
-                        onChange={(event) => updateQuestion(question.id, { question: event.target.value })}
-                        style={{ minHeight: 75, width: '100%', boxSizing: 'border-box' }}
-                      />
-                      <p style={{ margin: '12px 0 6px', fontWeight: 600 }}>Answer options (select the correct answer)</p>
-                      {question.options.map((option, optionIndex) => (
-                        <label key={optionIndex} style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '8px 0' }}>
-                          <input
-                            type="radio"
-                            name={`correct-${selectedNode.id}-${question.id}`}
-                            checked={question.correctAnswer === optionIndex}
-                            onChange={() => updateQuestion(question.id, { correctAnswer: optionIndex })}
-                            aria-label={`Mark option ${optionIndex + 1} as correct`}
-                          />
-                          <input
-                            value={option}
-                            placeholder={`Option ${optionIndex + 1}`}
-                            onChange={(event) => updateQuestionOption(question.id, optionIndex, event.target.value)}
-                            style={{ minWidth: 0, flex: 1 }}
-                          />
-                        </label>
-                      ))}
-                    </div>
-                  ))}
-                  <button type="button" className="wide-button" onClick={addQuestion}>+ Add question</button>
-                  <p className="muted" style={{ fontSize: 12 }}>Questions and answer options are saved with the learning path.</p>
-                </section>
-              )}
-              <button
-                className="wide-button danger"
-                onClick={deleteSelected}
-              >
-                Delete this block
-              </button>
-            </>
-          ) : (
-            <p className="muted">Select a learning block to edit its details.</p>
-          )}
-          <div className="properties-help">
-            <h4>Quick tip</h4>
-            <p>
-              Select any block on the canvas to edit its title and description.
-              Load a saved backend path first if you want to update an existing
-              record.
-            </p>
-          </div>
-        </aside>
-      </div>
-      {previewMode && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="learning-preview-title"
-          className="preview-overlay"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 1000,
-            overflowY: 'auto',
-            background: '#f4f8fc',
-            padding: '24px',
-          }}
-        >
-          <div
-            style={{
-              maxWidth: '900px',
-              margin: '0 auto',
-              background: '#ffffff',
-              borderRadius: '16px',
-              padding: '28px',
-              boxShadow: '0 12px 40px rgba(15, 23, 42, 0.16)',
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '16px',
-                flexWrap: 'wrap',
-                marginBottom: '24px',
-              }}
-            >
-              <div style={{ marginBottom: 28 }}>
-  <p style={{
-    color: '#0878f9',
-    fontWeight: 700,
-    margin: '0 0 8px'
-  }}>
-    LEARNER PREVIEW
-  </p>
-
-  <h1 style={{
-    fontSize: 42,
-    lineHeight: 1.2,
-    margin: '0 0 8px'
-  }}>
-    Edrevel Learning Path
-  </h1>
-
-  <p style={{
-    margin: 0,
-    color: '#64748b',
-    lineHeight: 1.5
-  }}>
-    {prompt}
-  
-  </p>
-</div>
-<button onClick={() => setPreviewMode(false)}>
-  ← Back to editor
-</button>
-</div>
-{nodes.length === 0 ? (
-              <div
-                style={{
-                  border: '1px dashed #cbd5e1',
-                  borderRadius: '12px',
-                  padding: '32px',
-                  textAlign: 'center',
-                  color: '#64748b',
-                }}
-              >
-                No learning blocks yet. Return to the editor and add a learning unit or assessment.
-              </div>
-            ) : (
-              <div style={{ display: 'grid', gap: '16px' }}>
-                {nodes.map((node, index) => (
-                  <article
-                    key={node.id}
-                    style={{
-                      border: '1px solid #dbe7f3',
-                      borderLeft: `5px solid ${node.type === 'assessment' ? '#10b981' : '#1683ed'}`,
-                      borderRadius: '12px',
-                      padding: '20px',
-                      background: '#ffffff',
-                    }}
-                  >
-                    <p
-                      style={{
-                        color: node.type === 'assessment' ? '#047857' : '#0878e8',
-                        fontWeight: 700,
-                        fontSize: '12px',
-                        letterSpacing: '0.06em',
-                        margin: '0 0 10px',
-                      }}
-                    >
-                      {`STEP ${index + 1} · ${node.type === 'unit' ? 'LEARNING UNIT' : 'ASSESSMENT'}`}
-                    </p>
-                    <h2 style={{ margin: '0 0 10px', fontSize: '22px' }}>
-                      {node.title}
-                    </h2>
-                    <p style={{ margin: 0, color: '#475569', lineHeight: 1.6 }}>
-                      {node.description}
-                    </p>
-                    {node.type === 'assessment' && (node.questions ?? []).map((question, questionIndex) => (
-                      <div key={question.id} style={{ marginTop: 18, borderTop: '1px solid #e2e8f0', paddingTop: 14 }}>
-                        <strong>{`Q${questionIndex + 1}. ${question.question || 'Untitled question'}`}</strong>
-                        <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
-                          {question.options.map((option, optionIndex) => {
-                            const answerKey = `${node.id}-${question.id}`
-                            const isChosen = quizAnswers[answerKey] === optionIndex
-                            const isCorrect = question.correctAnswer === optionIndex
-                            return (
-                              <label
-                                key={optionIndex}
-                                style={{
-                                  display: 'flex', alignItems: 'center', gap: 10,
-                                  padding: '10px 12px', border: '1px solid #dbe7f3',
-                                  borderRadius: 8, cursor: quizSubmitted ? 'default' : 'pointer',
-                                  background: quizSubmitted && isCorrect ? '#ecfdf5' : isChosen ? '#eff6ff' : '#fff',
-                                  borderColor: quizSubmitted && isCorrect ? '#10b981' : isChosen ? '#1683ed' : '#dbe7f3',
-                                }}
-                              >
-                                <input
-                                  type="radio"
-                                  name={`preview-${node.id}-${question.id}`}
-                                  checked={isChosen}
-                                  disabled={quizSubmitted}
-                                  onChange={() => setQuizAnswer(node.id, question.id, optionIndex)}
-                                />
-                                <span>{option || `Option ${optionIndex + 1}`}</span>
-                                {quizSubmitted && isCorrect && <strong style={{ marginLeft: 'auto', color: '#047857' }}>Correct answer</strong>}
-                              </label>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    ))}
-                  </article>
-                ))}
-              </div>
-            )}
-            {quizQuestions.length > 0 && (
-              <section style={{ marginTop: 24, padding: 20, borderRadius: 12, background: '#f8fafc', border: '1px solid #dbe7f3' }}>
-                {!quizSubmitted ? (
-                  <>
-                    <p style={{ marginTop: 0, color: '#475569' }}>
-                      Answer all {quizQuestions.length} question(s), then submit to see your score.
-                    </p>
-                    <button
-                      className="primary"
-                      onClick={submitQuiz}
-                      disabled={aiLoading}
-                    >
-                      Submit quiz
-                    </button>
-                  </>
-                ) : (
-                  <div role="status" aria-live="polite">
-                    <h2 style={{ marginTop: 0 }}>Quiz results</h2>
-                    <p style={{ fontSize: 20, fontWeight: 700, color: '#0878e8' }}>
-                      Score: {quizScore} / {quizQuestions.length} ({Math.round((quizScore / quizQuestions.length) * 100)}%)
-                    </p>
-                    <p>{quizScore === quizQuestions.length ? 'Excellent! You answered every question correctly.' : 'Review the highlighted correct answers and try again.'}</p>
-                    
-<div
-  style={{
-    marginTop: 16,
-    padding: 16,
-    borderRadius: 10,
-    background:
-      quizQuestions.length > 0 &&
-      (quizScore / quizQuestions.length) * 100 < 50
-        ? '#fff7ed'
-        : '#ecfdf5',
-    border: '1px solid #dbe7f3',
+ function loadLocal() {
+  try { const raw=localStorage.getItem('edrevel-adaptive-path'); if(!raw) throw Error('No local draft found.')
+   const p=JSON.parse(raw);if(!Array.isArray(p.blocks)) throw Error('Draft format is invalid.')
+   setBlocks(p.blocks);setPrompt(p.prompt??'');setSelectedId(p.blocks[0]?.id??1);setStatus('Local draft loaded');setError('')
+  } catch(e){setError(e instanceof Error?e.message:'Could not load local draft.')}
+ }
+ async function loadPaths() {
+  setLoading(true);setError('')
+  try {const r=await fetch(API);if(!r.ok)throw Error(`HTTP ${r.status}`);const d=await r.json();if(!Array.isArray(d))throw Error('API did not return a list.')
+   setPaths(d);setStatus(`Backend connected — ${d.length} path(s) found`)
+  }catch(e){setError(`Could not load backend paths. Check Spring Boot at localhost:8080. ${e instanceof Error?e.message:''}`)}
+  finally{setLoading(false)}
+ }
+ function loadPath() {
+  const p=paths.find(p=>idOf(p)===Number(pathId));if(!p){setError('Choose a saved backend path first.');return}
+  try {let raw:any=p.payload??p.content;if(typeof raw==='string')raw=JSON.parse(raw);if(typeof raw==='string')raw=JSON.parse(raw)
+   const list=Array.isArray(raw)?raw:raw?.nodes;if(!Array.isArray(list))throw Error('Saved path has no node list.')
+   setBlocks(list.map((n:any,i:number)=>({id:Number(n.id)||i+1,type:String(n.type).toLowerCase().includes('group')?'group':String(n.type).toLowerCase().includes('start')?'start':String(n.type).toLowerCase().includes('complete')?'complete':'section',title:n.title??n.label??`Section ${i+1}`,description:n.description??'',questions:Number(n.questions??n.config?.questions?.length??0),duration:Number(n.duration??n.config?.duration??0),difficulty:n.difficulty??n.config?.difficulty??'Select difficulty',condition:n.condition??n.config?.condition??''})))
+   setSelectedId(Number(list[0]?.id)||1);setStatus(`Loaded path #${pathId}`);setError('')
+  }catch(e){setError(e instanceof Error?e.message:'Could not parse saved path.')}
+ }
+ async function saveBackend() {
+  setLoading(true);setError('')
+  try {
+   const r=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+    name:'Edrevel Adaptive Learning Path',description:prompt,status:'DRAFT',version:1,
+    nodes:blocks.map(b=>({id:String(b.id),componentId:String(b.id),type:b.type,label:b.title,description:b.description,position:pos[b.id]??{x:100,y:b.id*100},config:{questions:b.questions,duration:b.duration,difficulty:b.difficulty,condition:b.condition}})),
+    edges:edges.map(([from,to])=>({from:String(from),to:String(to)}))
+   })})
+   if(!r.ok)throw Error(`HTTP ${r.status}: ${await r.text()}`)
+   setStatus('Saved to backend');await loadPaths()
+  }catch(e){setError(`Save failed: ${e instanceof Error?e.message:'Unknown error'}`)}
+  finally{setLoading(false)}
+ }
+ function validate() {
+  const missing=blocks.filter(b=>!b.title.trim()||!b.description.trim())
+  if(missing.length){setError(`${missing.length} block(s) need a title and description.`);setStatus('Validation needs attention')}
+  else{setError('');setStatus('Path validated successfully')}
+ }
+ function removeSelected() {
+  if(!selected||selected.type==='start'||selected.type==='complete'){setError('Start and completion blocks cannot be deleted.');return}
+  setBlocks(curr=>curr.filter(b=>b.id!==selectedId));setSelectedId(1);setStatus('Block deleted')
+ }
+ function reset(){setBlocks(initial);setSelectedId(4);setStatus('Sample adaptive path generated');setError('')}
+ function nodeClass(b:Block){return `flow-node ${b.type}-node ${selectedId===b.id?'node-selected':''}`}
+ return <main className="app-shell">
+  <header className="topbar"><div className="brand"><div className="brand-mark">E</div><div><strong>Adaptive Learning Path Builder</strong><span>Create conditional quiz flows with adaptive sections</span></div></div>
+   <nav className="top-nav"><button className={!preview?'active':''} onClick={()=>setPreview(false)}>▦　Builder</button><button className={preview?'active':''} onClick={()=>setPreview(true)}>◎　Preview</button><button
+  type="button"
+  onClick={(event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    saveLocal();
   }}
 >
-  <h3>Adaptive Learning Recommendation</h3>
-
-  {(quizScore / quizQuestions.length) * 100 < 50 ? (
-    <>
-      <strong>Recommended path: Easy</strong>
-      <p>
-        Your score is below 50%. Review the Introduction and Core Concepts,
-        then try the assessment again.
-      </p>
-    </>
-  ) : (
-    <>
-      <strong>Recommended path: Advanced</strong>
-      <p>
-        Your score is 50% or higher. Continue to advanced concepts and
-        practical exercises.
-      </p>
-    </>
-  )}
-</div>
-
-                    <section
-                      aria-live="polite"
-                      style={{ marginTop: 20, padding: 18, borderRadius: 12, background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1e3a8a' }}
-                    >
-                      <h3 style={{ margin: '0 0 10px' }}>✦ AI Learning Recommendation</h3>
-                      {aiLoading && (
-  <p style={{ margin: 0 }}>
-    Personalized recommendation is temporarily unavailable.
-    Please follow the adaptive learning recommendation above.
-  </p>
-)}
-                      {!aiLoading && aiError && (
-                        <p role="alert" style={{ margin: 0, color: '#b91c1c' }}>
-                          {aiError} Your quiz score is saved on this screen.
-                        </p>
-                      )}
-                      {!aiLoading && !aiError && aiRecommendation && (
-                        <p style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{aiRecommendation}</p>
-                      )}
-                    </section>
-                    <button onClick={openLearnerPreview} style={{ marginTop: 12 }}>Try again</button>
-                  </div>
-                )}
-              </section>
-            )}
-            <div style={{ marginTop: '24px', textAlign: 'center' }}>
-              <button onClick={() => setPreviewMode(false)}>
-                Return to editing
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </main>
-  )
+  Save Draft
+</button><button className="publish" onClick={saveBackend} disabled={loading}>▷　Publish</button></nav>
+  </header>
+  <div className="workspace">
+   <aside className="left-panel"><h3>Add Components</h3><p className="muted">Drag or click to add to canvas</p>
+    <button className="component" onClick={()=>add('section')}><b className="blue-icon">□</b><span><strong>Section</strong><small>Add a quiz / assessment section</small></span></button>
+    <button className="component" onClick={()=>add('group')}><b className="purple-icon">▱</b><span><strong>Group</strong><small>Group sections for conditional routing</small></span></button>
+    <div className="how"><strong>ⓘ　How it works</strong><ul><li>Add sections and group related modules.</li><li>Use multiple paths where only one will be shown.</li><li>Set conditions based on previous scores.</li><li>Learners are routed based on performance.</li></ul></div>
+    <div className="example"><strong>Example: SAT Adaptive Test</strong><div>Math Module 1<small>Regular section</small></div><section>Math Module 2 (Group)<article>Easy Version<small>If score &lt; 50%</small></article><article>Advanced<small>If score ≥ 50%</small></article></section></div>
+    <div className="backend"><h3>Backend paths</h3><button onClick={loadPaths} disabled={loading}>{loading?'Loading…':'↻ Refresh saved paths'}</button><select value={pathId} onChange={e=>setPathId(e.target.value)}><option value="">Select saved path</option>{paths.map((p,i)=>{const id=idOf(p);return id==null?null:<option key={id} value={String(id)}>{p.name??`Learning path ${i+1}`} (ID: {id})</option>})}</select><button onClick={loadPath}>Load selected path</button><button onClick={loadLocal}>Load local draft</button></div>
+   </aside>
+   <section className="canvas-area"><div className="canvas-tools"><div className="zoom"><button onClick={()=>setZoom(z=>Math.max(40,z-10))}>−</button><span>{zoom}%</span><button onClick={()=>setZoom(z=>Math.min(110,z+10))}>＋</button></div><button onClick={()=>setShowConditions(v=>!v)}>⛶</button></div>
+    {error&&<div className="error" role="alert">{error}</div>}
+    {preview?<div className="preview"><small>LEARNER PREVIEW</small><h1>Adaptive Learning Path</h1><p>{prompt}</p>{blocks.map((b,i)=><article key={b.id}><small>STEP {i+1}</small><h3>{b.title}</h3><p>{b.description}</p><span>{b.questions} questions · {b.duration} minutes · {b.difficulty}</span></article>)}<button onClick={()=>setPreview(false)}>← Back to Builder</button></div>:
+     <div className="flow-scroll"><div className="flow-canvas" style={{transform:`scale(${zoom/70})`}}>
+      <svg viewBox="0 0 900 830" className="connectors" aria-hidden="true">{edges.map(([a,b],i)=>{const p=pos[a],q=pos[b];if(!p||!q||!blocks.some(n=>n.id===a)||!blocks.some(n=>n.id===b))return null;const x1=p.x+82,y1=p.y+35,x2=q.x+82,y2=q.y+7,mid=(y1+y2)/2;return <path key={i} className={Math.abs(x1-x2)>20?'branch':'connector'} d={Math.abs(x1-x2)>20?`M${x1} ${y1} C${x1} ${mid},${x2} ${mid},${x2} ${y2}`:`M${x1} ${y1} L${x2} ${y2}`}/>})}</svg>
+      {blocks.map((b,i)=>{const p=pos[b.id]??{x:350,y:25+i*90};return <button key={b.id} className={nodeClass(b)} style={{left:p.x,top:p.y}} onClick={()=>setSelectedId(b.id)}><span className="node-icon">{b.type==='start'?'●':b.type==='group'?'▱':b.type==='complete'?'◉':'□'}</span><span className="node-copy"><strong>{b.title}</strong><small>{b.type==='group'?b.description:`${b.questions} questions • ${b.duration} minutes`}</small></span>{b.type==='group'&&<em>Group</em>}{showConditions&&b.condition&&<span className="node-condition">{b.condition}</span>}</button>})}
+     </div></div>}
+    <footer><span>●　{status}</span><div><button onClick={validate}>✓ Validate path</button><button onClick={reset}>Reset sample</button></div></footer>
+   </section>
+   <aside className="right-panel"><div className="properties-title"><h3>Properties</h3><button className="trash" onClick={removeSelected}>♜</button></div>
+    {selected&&<><span className={`type-pill ${selected.type}`}>{selected.type==='group'?'GROUP':selected.type==='start'?'START ASSESSMENT':selected.type==='complete'?'COMPLETION':'SECTION'}</span>
+     <label htmlFor="label">Label</label><input id="label" value={selected.title} onChange={e=>update('title',e.target.value)}/>
+     <label htmlFor="description">Description</label><textarea id="description" value={selected.description} placeholder="Enter description" onChange={e=>update('description',e.target.value)}/>
+     <hr/><h4>Section Details</h4><div className="two"><div><label htmlFor="questions">Questions</label><input id="questions" type="number" min="0" value={selected.questions} onChange={e=>update('questions',Number(e.target.value))}/></div><div><label htmlFor="duration">Duration (min)</label><input id="duration" type="number" min="0" value={selected.duration} onChange={e=>update('duration',Number(e.target.value))}/></div></div>
+     <label htmlFor="difficulty">Difficulty</label><select id="difficulty" value={selected.difficulty} onChange={e=>update('difficulty',e.target.value)}><option>Select difficulty</option><option>Easy</option><option>Medium</option><option>Advanced</option><option>Adaptive</option></select>
+     <hr/><div className="conditions-title"><h4>Assignment Conditions</h4><button onClick={()=>update('condition',selected.condition?selected.condition+'\nAdditional condition':'If score < 50%')}>＋ Add</button></div><p className="muted">Define when this section should be shown to learners.</p>
+     {selected.condition&&<div className="condition-card"><div className="condition-head"><strong>Condition 1</strong><button onClick={()=>update('condition','')}>×</button></div><label htmlFor="condition">Condition rule</label><textarea id="condition" value={selected.condition} onChange={e=>update('condition',e.target.value)}/><div className="summary">{selected.condition}</div></div>}
+     <hr/><h4>Parent Group</h4><p className="muted">{selected.type==='section'?'Math Module 2':'Root path'}</p>
+    </>}
+    <div className="tip"><strong>Quick tip</strong><p>Select any block on the canvas to edit its properties. Use groups to define adaptive branches based on learner performance.</p></div>
+   </aside>
+  </div>
+ </main>
 }
-export default App
