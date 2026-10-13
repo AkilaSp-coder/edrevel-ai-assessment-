@@ -35,7 +35,11 @@ public class LearningPathService {
 
             learningPath.setName(request.name());
             learningPath.setDescription(request.description());
-            learningPath.setStatus(request.status());
+            learningPath.setStatus(
+        request.status() != null && !request.status().isBlank()
+                ? request.status()
+                : "DRAFT"
+);
 
             learningPath.setVersion(
                     request.version() != null
@@ -85,7 +89,9 @@ public class LearningPathService {
 
             learningPath.setName(request.name());
             learningPath.setDescription(request.description());
-            learningPath.setStatus(request.status());
+            if (request.status() != null && !request.status().isBlank()) {
+    learningPath.setStatus(request.status());
+}
 
             learningPath.setVersion(
                     request.version() != null
