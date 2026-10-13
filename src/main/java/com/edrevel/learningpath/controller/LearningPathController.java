@@ -15,10 +15,8 @@ import java.util.NoSuchElementException;
 import com.edrevel.learningpath.dto.EvaluationRequest;
 import com.edrevel.learningpath.dto.EvaluationResponse;
 
-@CrossOrigin(origins = {
-    "http://localhost:5173",
-    "http://localhost:5174"
-})
+
+
 @RestController
 @RequestMapping("/api/learning-paths")
 public class LearningPathController {

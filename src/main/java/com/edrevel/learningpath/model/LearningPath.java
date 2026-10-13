@@ -17,7 +17,7 @@ public class LearningPath {
     private String description;
 
     @Column(nullable = false, length = 20)
-    private String status;
+    private String status = "DRAFT";
 
     @Column(nullable = false)
     private Integer version;
