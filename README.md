@@ -1,115 +1,90 @@
 # Edrevel AI – Adaptive Learning Path Builder
 
-## 1. Project Overview
+A full-stack learning application that helps users create learning paths and receive personalized learning recommendations based on assessment scores and learning context.
 
-The Edrevel AI Adaptive Learning Path Builder is a full-stack assessment project designed to help learners receive personalized learning recommendations based on their scores and learning context.
+## Tech Stack
 
-## 2. Technologies Used
-
-### Frontend
+**Frontend**
 - React
 - TypeScript
 - Vite
-- HTML and CSS
+- CSS
 
-### Backend
-- Java
+**Backend**
+- Java 17
 - Spring Boot
 - Maven
 - REST APIs
 
-### AI Integration
-- Google Gemini API
-- JSON-based API requests and responses
+**AI Integration**
+- Gemini API configuration for AI-powered recommendations
 
-### Development and Testing Tools
-- Visual Studio Code
-- Git and GitHub
-- Postman
-
-## 3. Features
-
-- Learning Path Builder user interface
-- Backend REST API for learning-path operations
-- AI-powered personalized learning recommendations
-- Score-based recommendations using the learner's learning context
-- API testing using Postman
-
-## 4. Project Structure
+## Project Structure
 
 ```text
 edrevel-ai-assessment-/
 ├── adaptive-learning-builder/
 │   ├── src/
 │   ├── pom.xml
-│   └── mvnw
+│   └── mvnw.cmd
 ├── frontend/
 │   ├── src/
-│   ├── public/
 │   ├── package.json
-│   └── vite.config.ts
+│   └── README.md
 ├── screenshots/
 ├── README.md
-└── pom.xml
+└── .gitignore
 ```
 
-## 5. Prerequisites
+## Prerequisites
 
-Install the following:
-- Java and Maven
+- Java 17 or compatible configured JDK
 - Node.js and npm
 - Git
-- Google Gemini API key
+- Gemini API key for AI recommendation functionality
 
-## 6. Run the Backend
+## Run the Backend
 
-Open a terminal in the Spring Boot project directory:
-
-```bash
-cd adaptive-learning-builder
-```
-
-Configure the `GEMINI_API_KEY` environment variable before running the application.
-
-In PowerShell, for the current terminal session:
+Open a terminal in the project root:
 
 ```powershell
+cd adaptive-learning-builder
 $env:GEMINI_API_KEY="YOUR_GEMINI_API_KEY"
-```
-
-Run the backend:
-
-```bash
-mvn spring-boot:run
+.\mvnw.cmd spring-boot:run
 ```
 
 The backend runs at:
 
 `http://localhost:8080`
 
-## 7. Run the Frontend
+Keep the API key private. Do not commit it to GitHub.
 
-Open a separate terminal:
+## Run the Frontend
 
-```bash
+Open a second terminal from the project root:
+
+```powershell
 cd frontend
 npm install
 npm run dev
 ```
 
-Open the local URL displayed by Vite in the terminal.
+Open the local URL printed by Vite, usually:
 
-## 8. API Testing
+`http://localhost:5173`
 
-### AI Recommendation API
+## API Endpoints
 
-**Method:** POST
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/api/ai/recommendation` | Generate a learning recommendation |
+| POST | `/api/learning-paths` | Create a learning path |
+| GET | `/api/learning-paths` | Retrieve learning paths |
+| GET | `/api/learning-paths/{id}` | Retrieve a learning path by ID |
 
-**Endpoint:**
+### AI Recommendation Example
 
-`http://localhost:8080/api/ai/recommendation`
-
-**Sample request:**
+**Request**
 
 ```json
 {
@@ -118,58 +93,34 @@ Open the local URL displayed by Vite in the terminal.
 }
 ```
 
-**Verified result:** `200 OK`
+Send the request to:
 
-The API returned a personalized learning recommendation for the supplied score and learning context.
+`POST http://localhost:8080/api/ai/recommendation`
 
-### Get Learning Paths
+Use Postman with `Content-Type: application/json` to verify the endpoint.
 
-**Method:** GET
+## Build and Verification
 
-**Endpoint:**
+Build the frontend:
 
-`http://localhost:8080/api/learning-paths`
-
-**Verified result:** `200 OK`
-
-The endpoint returned an empty JSON array (`[]`) when no learning paths were saved.
-
-**Note:** PUT and DELETE API operations have not yet been verified.
-
-## 9. Build and Verification
-
-### Backend
-
-```bash
-mvn clean package
-```
-
-### Frontend
-
-```bash
+```powershell
+cd frontend
 npm run build
 ```
 
-### Verification Checklist
+Build and test the backend from the project root:
 
-- [x] AI recommendation endpoint tested successfully
-- [x] GET learning-paths endpoint tested successfully
-- [ ] PUT endpoint testing
-- [ ] DELETE endpoint testing
-- [ ] Final frontend and backend integration verification
+```powershell
+cd adaptive-learning-builder
+.\mvnw.cmd clean package
+```
 
-## 10. Screenshots
+## Screenshots
 
-See the `screenshots/` directory for the available project and API testing screenshots.
+Application and API testing screenshots are available in the `screenshots/` directory.
 
-## 11. Security
+## Notes
 
-- Do not commit API keys or other secrets to GitHub.
-- Configure the Gemini API key through an environment variable.
-- Replace the placeholder API key with your own key locally.
-
-## 12. Author
-
-**Akila M**
-
-Full Stack Developer Assessment – NilaApps / Edrevel AI
+- Start the backend before testing frontend features that depend on the API.
+- Configure the required environment variables before using AI recommendations.
+- Verify the API response and application behavior locally before submission.
